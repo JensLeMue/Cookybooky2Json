@@ -30,33 +30,31 @@ def parse_xcookybooky_recipe(content):
         "dateUpdated": None
     }
 
-    # Extract recipe: \begin{recipe}[options]{title}
+    # Find options and title
     start = content.find('\\begin{recipe}[')
     if start != -1:
         options_start = start + len('\\begin{recipe}[')
-        options_end = content.find(']', options_start)
+        bracket_count = 1  # Already inside [
+        options_end = -1
+        for i in range(options_start, len(content)):
+            if content[i] == '[':
+                bracket_count += 1
+            elif content[i] == ']':
+                bracket_count -= 1
+                if bracket_count == 0:
+                    options_end = i
+                    break
         if options_end != -1:
             options = content[options_start:options_end]
             title_start = options_end + 1
             if title_start < len(content) and content[title_start] == '{':
                 title_end = content.find('}', title_start)
-                print(f"title_start: {title_start}, title_end: {title_end}")  # Debug
-                print(f"content[title_start:title_end+1]: {repr(content[title_start:title_end+1])}")  # Debug
                 if title_end != -1:
                     recipe["name"] = content[title_start+1:title_end].strip()
-                else:
-                    recipe["name"] = ""
-            else:
-                recipe["name"] = ""
-        else:
-            options = ""
-            recipe["name"] = ""
     else:
         options = ""
-        recipe["name"] = ""
 
-    print(f"Options: {repr(options)}")  # Debug
-    print(f"Name: {repr(recipe['name'])}")  # Debug
+    # Parse options
     prep_time_match = re.search(r'preparationtime\s*=\s*\{\\unit\[(\d+)\]\{Min\}\}', options)
     if prep_time_match:
         prep_time = prep_time_match.group(1)
@@ -81,30 +79,38 @@ def parse_xcookybooky_recipe(content):
         recipe["extras"]["bakingMethod"] = method
         recipe["extras"]["bakingTemperature"] = f"{temp}°C"
 
-        # Parse options
-        prep_time_match = re.search(r'preparationtime\s*=\s*\{\\unit\[(\d+)\]\{Min\}\}', options)
+    # Extract options
+    if recipe["name"]:
+        options_pattern = r'\\begin\{recipe\}\[(.*)\]\{' + re.escape(recipe["name"]) + r'\}'
+        options_match = re.search(options_pattern, content)
+        options = options_match.group(1) if options_match else ""
+    else:
+        options = ""
+
+    # Parse options
+    prep_time_match = re.search(r'preparationtime\s*=\s*\{\\unit\[(\d+)\]\{Min\}\}', options)
+    if prep_time_match:
+        prep_time = prep_time_match.group(1)
+        recipe["prepTime"] = f"PT{prep_time}M"
+
+    baking_time_match = re.search(r'bakingtime\s*=\s*\{\\unit\[(\d+)\]\{Min\}\}', options)
+    if baking_time_match:
+        baking_time = baking_time_match.group(1)
+        recipe["cookTime"] = f"PT{baking_time}M"
         if prep_time_match:
-            prep_time = prep_time_match.group(1)
-            recipe["prepTime"] = f"PT{prep_time}M"
+            total = int(prep_time) + int(baking_time)
+            recipe["totalTime"] = f"PT{total}M"
 
-        baking_time_match = re.search(r'bakingtime\s*=\s*\{\\unit\[(\d+)\]\{Min\}\}', options)
-        if baking_time_match:
-            baking_time = baking_time_match.group(1)
-            recipe["cookTime"] = f"PT{baking_time}M"
-            if prep_time_match:
-                total = int(prep_time) + int(baking_time)
-                recipe["totalTime"] = f"PT{total}M"
+    portion_match = re.search(r'portion\s*=\s*([^,}]+)', options)
+    if portion_match:
+        recipe["recipeYield"] = portion_match.group(1).strip()
 
-        portion_match = re.search(r'portion\s*=\s*([^,}]+)', options)
-        if portion_match:
-            recipe["recipeYield"] = portion_match.group(1).strip()
-
-        baking_temp_match = re.search(r'bakingtemperature\s*=\s*\{\\protect\\bakingtemperature\{([^=]+)=\s*\\unit\[(\d+)\]\{\\textcelsius\}\}\}', options)
-        if baking_temp_match:
-            method = baking_temp_match.group(1)
-            temp = baking_temp_match.group(2)
-            recipe["extras"]["bakingMethod"] = method
-            recipe["extras"]["bakingTemperature"] = f"{temp}°C"
+    baking_temp_match = re.search(r'bakingtemperature\s*=\s*\{\\protect\\bakingtemperature\{([^=]+)=\s*\\unit\[(\d+)\]\{\\textcelsius\}\}\}', options)
+    if baking_temp_match:
+        method = baking_temp_match.group(1)
+        temp = baking_temp_match.group(2)
+        recipe["extras"]["bakingMethod"] = method
+        recipe["extras"]["bakingTemperature"] = f"{temp}°C"
 
     # Extract source: \source{...}
     source_match = re.search(r'\\source\s*\{([^}]*)\}', content)
@@ -165,7 +171,9 @@ def convert_tex_to_json(tex_file_path, output_dir):
             recipe_content = recipe_content[:end_match.start()]
         recipe_data = parse_xcookybooky_recipe('\\begin{recipe}' + recipe_content)
         if recipe_data["name"]:
-            json_file = os.path.join(output_dir, f"{recipe_data['name'].replace(' ', '_')}.json")
+            # Clean the name for filename
+            clean_name = re.sub(r'[^a-zA-Z0-9_\s]', '', recipe_data['name']).strip()
+            json_file = os.path.join(output_dir, f"{clean_name.replace(' ', '_')}.json")
             with open(json_file, 'w', encoding='utf-8') as f:
                 json.dump(recipe_data, f, indent=2, ensure_ascii=False)
             print(f"Created {json_file}")
